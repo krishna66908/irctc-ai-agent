@@ -12,6 +12,8 @@ import {
   detectOtpSecurityCheckpoint,
   detectTestLoginOutcome,
   fillLoginCredentials,
+  fillAndSelectStation,
+  loadJourneyPreferences,
   selectEnglishLanguage,
   selectOtpInsteadOfCaptcha,
   submitSignIn,
@@ -47,6 +49,7 @@ async function main() {
   const keepOpen = process.argv.includes('--keep-open');
   const channel = process.argv.includes('--system-chrome') ? 'chrome' : undefined;
   const testLogin = process.argv.includes('--test-login');
+  const skipLogin = process.argv.includes('--skip-login');
 
   log('[Agent] Starting browser...');
   const browser = await launchBrowser({ headless: false, channel });
@@ -70,7 +73,8 @@ async function main() {
       log('[Agent] Language popup not detected; leaving the current page as-is.');
     }
 
-    log('[Agent] Observing page for Login/Register...');
+    if (!skipLogin) {
+      log('[Agent] Observing page for Login/Register...');
     const loginDetectionStart = performance.now();
     const loginControl = await detectLoginRegister(page);
     if (!loginControl) {
@@ -138,7 +142,31 @@ async function main() {
     log('[Agent] Waiting for manual OTP/security verification...');
     console.log('[Human] Please complete the OTP/security verification manually in the browser.');
     await waitForLoggedInState(page);
-    log('[Agent] Logged-in state detected.');
+      log('[Agent] Logged-in state detected.');
+    } else {
+      log('[Agent] --skip-login enabled; waiting for an authenticated page...');
+      await waitForLoggedInState(page);
+      log('[Agent] Logged-in state detected.');
+    }
+
+    const preferences = await loadJourneyPreferences();
+    const fromStation = {
+      code: preferences.journey.from,
+      name: 'NEW DELHI',
+    };
+    log('[Agent] Observing journey search form...');
+    log('[Agent] Observing origin From field...');
+    log(`[Agent] Entering origin: ${fromStation.code}`);
+    try {
+      await fillAndSelectStation(page, 'From', fromStation, { diagnostic: true });
+    } catch (error) {
+      log('[Agent] From autocomplete selection failed.');
+      log(`[Diagnostic] From selection error: ${error instanceof Error ? error.message : String(error)}`);
+      log('[Agent] Browser left open for manual inspection.');
+      await new Promise(() => {});
+    }
+    log('[Agent] Origin station selected and verified.');
+    return;
 
     if (keepOpen) {
       log('[Agent] Browser is staying open for visual verification.');

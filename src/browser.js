@@ -1,4 +1,5 @@
 import { chromium } from 'playwright';
+import { readFile } from 'node:fs/promises';
 
 export const IRCTC_URL = 'https://www.irctc.co.in/nget/train-search';
 
@@ -6,7 +7,7 @@ async function fixedDelay(milliseconds) {
   await new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-async function typeHumanLike(locator, value) {
+export async function typeHumanLike(locator, value) {
   await locator.click();
 
   for (let index = 0; index < value.length; index += 1) {
@@ -306,4 +307,304 @@ export async function waitForLoggedInState(page) {
 
     return !loginDialog && authenticatedIndicator;
   }, undefined, { timeout: 10 * 60 * 1000 });
+}
+
+export async function loadJourneyPreferences() {
+  const configUrl = new URL('../config/preferences.example.json', import.meta.url);
+  return JSON.parse(await readFile(configUrl, 'utf8'));
+}
+
+export async function detectStationInput(page, stationLabel) {
+  const labelPattern = new RegExp(`^${stationLabel}$`, 'i');
+  const stationCandidates = [
+    ...(stationLabel === 'From'
+      ? [page.locator('[aria-label="Enter From station. Input is Mandatory."]:visible')]
+      : []),
+    page.getByRole('combobox', { name: labelPattern }),
+    page.getByRole('textbox', { name: labelPattern }),
+    page.getByLabel(labelPattern),
+    page.locator(`input[placeholder*="${stationLabel}" i]:visible`),
+    page.locator(`input[aria-label*="${stationLabel}" i]:visible`),
+  ];
+
+  return firstVisible(stationCandidates, 15000);
+}
+
+function stationPattern(station) {
+  const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(
+    `${escapeRegex(station.name)}\\s*-\\s*${escapeRegex(station.code)}\\s*\\(${escapeRegex(station.name)}\\)`,
+    'i',
+  );
+}
+
+async function logAutocompleteDiagnostics(page, station, pattern, candidates) {
+  const relevantText = new RegExp(`${station.code}|${station.name}|journey|station`, 'i');
+  const visibleDetails = (elements) => elements
+    .filter((element) => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== 'none' && style.visibility !== 'hidden' &&
+        rect.width > 0 && rect.height > 0;
+    })
+    .map((element) => ({
+      tag: element.tagName,
+      text: (element.innerText || element.textContent || '').replace(/\s+/g, ' ').trim(),
+      id: element.id || null,
+      className: String(element.className || ''),
+      role: element.getAttribute('role'),
+      ariaLabel: element.getAttribute('aria-label'),
+      ariaSelected: element.getAttribute('aria-selected'),
+      disabled: element.hasAttribute('disabled') || element.getAttribute('aria-disabled') === 'true',
+      href: element.getAttribute('href'),
+      clickable: element.matches('a,button,li,[role="option"],[role="button"]'),
+      ancestors: (() => {
+        const result = [];
+        let current = element.parentElement;
+        while (current && result.length < 6) {
+          result.push({
+            tag: current.tagName,
+            id: current.id || null,
+            className: String(current.className || ''),
+            role: current.getAttribute('role'),
+            clickable: current.matches('a,button,li,[role="option"],[role="button"]'),
+          });
+          current = current.parentElement;
+        }
+        return result;
+      })(),
+      box: (() => {
+        const rect = element.getBoundingClientRect();
+        return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+      })(),
+    }))
+    .filter((detail) => relevantText.test(detail.text))
+    .slice(0, 80);
+
+  const containers = await page.locator(
+    '[role="listbox"], [role="option"], ul, .ui-autocomplete, .autocomplete, .dropdown-menu',
+  ).evaluateAll(visibleDetails);
+  const relevantElements = await page.locator('body *').evaluateAll(visibleDetails);
+  const visibleOptionLocator = page.locator(
+    '[role="option"].ui-autocomplete-list-item:visible',
+  );
+  const visibleOptions = [];
+  for (let index = 0; index < await visibleOptionLocator.count(); index += 1) {
+    const option = visibleOptionLocator.nth(index);
+    visibleOptions.push({
+      textContent: await option.textContent().catch(() => null),
+      outerHTML: await option.evaluate((element) => element.outerHTML).catch(() => null),
+      boundingBox: await option.boundingBox(),
+      isVisible: await option.isVisible().catch(() => false),
+      isEnabled: await option.isEnabled().catch(() => false),
+    });
+  }
+
+  console.log(`[Diagnostic] Station pattern: ${pattern}`);
+  console.log(`[Diagnostic] Visible autocomplete containers: ${JSON.stringify(containers)}`);
+  console.log(`[Diagnostic] Visible station-related elements: ${JSON.stringify(relevantElements)}`);
+  console.log(`[Diagnostic] Visible station options (${visibleOptions.length}): ${JSON.stringify(visibleOptions)}`);
+
+  for (const [description, locator] of candidates) {
+    const count = await locator.count();
+    let visibleCount = 0;
+    for (let index = 0; index < count; index += 1) {
+      if (await locator.nth(index).isVisible().catch(() => false)) {
+        visibleCount += 1;
+      }
+    }
+    console.log(`[Diagnostic] ${description}: count=${count}, visible=${visibleCount}`);
+  }
+}
+
+async function logOptionInteractionState(page, option, field, phase) {
+  const optionState = {
+    phase,
+    outerHTML: await option.evaluate((element) => element.outerHTML).catch(() => null),
+    boundingBox: await option.boundingBox(),
+    isVisible: await option.isVisible().catch(() => false),
+    isEnabled: await option.isEnabled().catch(() => false),
+    fromValue: field ? await field.inputValue().catch(() => null) : null,
+    activeElement: await page.evaluate(() => document.activeElement?.outerHTML || null),
+  };
+
+  if (optionState.boundingBox) {
+    const { x, y, width, height } = optionState.boundingBox;
+    optionState.elementFromPoint = await page.evaluate(({ centerX, centerY }) => {
+      const element = document.elementFromPoint(centerX, centerY);
+      return element ? {
+        tagName: element.tagName,
+        id: element.id || null,
+        className: String(element.className || ''),
+        outerHTML: element.outerHTML,
+      } : null;
+    }, { centerX: x + width / 2, centerY: y + height / 2 });
+  } else {
+    optionState.elementFromPoint = null;
+  }
+
+  console.log(`[Diagnostic] Option interaction state: ${JSON.stringify(optionState)}`);
+}
+
+async function logOptionStatesAfterKeyboard(page) {
+  const options = page.locator('[role="option"].ui-autocomplete-list-item');
+  const states = [];
+  for (let index = 0; index < await options.count(); index += 1) {
+    const option = options.nth(index);
+    if (!(await option.isVisible().catch(() => false))) {
+      continue;
+    }
+    states.push({
+      textContent: await option.textContent().catch(() => null),
+      className: await option.getAttribute('class'),
+      role: await option.getAttribute('role'),
+      ariaSelected: await option.getAttribute('aria-selected'),
+      ariaActiveDescendant: await option.getAttribute('aria-activedescendant'),
+      outerHTML: await option.evaluate((element) => element.outerHTML).catch(() => null),
+    });
+  }
+  console.log(`[Diagnostic] Options after ArrowDown: ${JSON.stringify(states)}`);
+}
+
+async function detectStationSuggestion(page, station, { diagnostic = false } = {}) {
+  const pattern = stationPattern(station);
+  const suggestionCandidates = [
+    [
+      'visible station list item',
+      page.locator('[role="option"].ui-autocomplete-list-item:visible').filter({ hasText: pattern }),
+    ],
+    ['role option', page.getByRole('option').filter({ hasText: pattern })],
+    ['visible role option', page.locator('[role="option"]:visible').filter({ hasText: pattern })],
+    ['visible list item', page.locator('li:visible').filter({ hasText: pattern })],
+    ['text match', page.getByText(pattern)],
+  ];
+
+  if (diagnostic) {
+    await logAutocompleteDiagnostics(page, station, pattern, suggestionCandidates);
+  }
+
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    for (const [, locator] of suggestionCandidates) {
+      const count = await locator.count();
+      for (let index = 0; index < count; index += 1) {
+        const candidate = locator.nth(index);
+        if (!(await candidate.isVisible().catch(() => false))) {
+          continue;
+        }
+
+        const text = (await candidate.innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
+        if (pattern.test(text) && !/journeys|→|->/i.test(text)) {
+          return candidate;
+        }
+      }
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 75));
+  }
+
+  return null;
+}
+
+async function verifyStationInput(field, station) {
+  const deadline = Date.now() + 5000;
+  const expectedCode = station.code.toUpperCase();
+  const expectedName = station.name.toUpperCase();
+
+  while (Date.now() < deadline) {
+    const value = (await field.inputValue().catch(() => '')).toUpperCase();
+    if (value.includes(expectedCode) && value.includes(expectedName)) {
+      return true;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 75));
+  }
+
+  return false;
+}
+
+async function logFromFieldDiagnostics(page, field) {
+  const details = await field.evaluate((element) => {
+    const active = document.activeElement;
+    return {
+      tag: element.tagName,
+      id: element.id || null,
+      name: element.getAttribute('name'),
+      placeholder: element.getAttribute('placeholder'),
+      value: element.value,
+      expanded: element.getAttribute('aria-expanded'),
+      activeDescendant: element.getAttribute('aria-activedescendant'),
+      visible: Boolean(element.offsetWidth || element.offsetHeight || element.getClientRects().length),
+      enabled: !element.disabled && element.getAttribute('aria-disabled') !== 'true',
+      activeElement: {
+        tag: active?.tagName || null,
+        id: active?.id || null,
+        className: active?.className ? String(active.className) : null,
+      },
+    };
+  }).catch(() => null);
+
+  console.log(`[Diagnostic] From input state: ${JSON.stringify(details)}`);
+}
+
+async function logKeyboardSelectionDiagnostics(page, field) {
+  const options = page.locator('[role="option"]:visible');
+  const visibleOptions = [];
+  for (let index = 0; index < await options.count(); index += 1) {
+    const option = options.nth(index);
+    visibleOptions.push({
+      text: (await option.textContent().catch(() => '')).replace(/\s+/g, ' ').trim(),
+      className: await option.getAttribute('class'),
+      ariaSelected: await option.getAttribute('aria-selected'),
+    });
+  }
+
+  const fieldState = await field.evaluate((element) => ({
+    value: element.value,
+    expanded: element.getAttribute('aria-expanded'),
+    activeDescendant: element.getAttribute('aria-activedescendant'),
+    activeElement: document.activeElement?.outerHTML || null,
+  }));
+
+  console.log(`[Diagnostic] After ArrowDown field state: ${JSON.stringify(fieldState)}`);
+  console.log(`[Diagnostic] After ArrowDown visible options: ${JSON.stringify(visibleOptions)}`);
+}
+
+export async function fillAndSelectStation(page, stationLabel, station, { diagnostic = false } = {}) {
+  const field = await detectStationInput(page, stationLabel);
+  if (!field) {
+    throw new Error(`Could not find the visible ${stationLabel} station input.`);
+  }
+
+  await field.scrollIntoViewIfNeeded();
+  await typeHumanLike(field, station.code);
+
+  const suggestion = await detectStationSuggestion(page, station, { diagnostic });
+  if (!suggestion) {
+    throw new Error(
+      `Could not find the ${station.name} - ${station.code} station suggestion for ${stationLabel}.`,
+    );
+  }
+
+  const fromField = await detectStationInput(page, stationLabel);
+  if (!fromField) {
+    throw new Error(`Could not re-detect the visible ${stationLabel} station input.`);
+  }
+
+  console.log(`[Diagnostic] From value after typing: ${await fromField.inputValue()}`);
+  await logFromFieldDiagnostics(page, fromField);
+  await fromField.focus();
+  console.log(`[Diagnostic] From input focused: ${await fromField.evaluate((element) => document.activeElement === element)}`);
+  await logFromFieldDiagnostics(page, fromField);
+  await fromField.press('ArrowDown');
+  await logKeyboardSelectionDiagnostics(page, fromField);
+  await fromField.press('Enter');
+
+  const verifiedField = await detectStationInput(page, stationLabel);
+  const finalValue = verifiedField ? await verifiedField.inputValue().catch(() => '') : '';
+  console.log(`[Diagnostic] From value after Enter: ${finalValue}`);
+  const selected = Boolean(verifiedField && await verifyStationInput(verifiedField, station));
+  if (!selected) {
+    throw new Error(`The selected ${stationLabel} station could not be verified.`);
+  }
 }
