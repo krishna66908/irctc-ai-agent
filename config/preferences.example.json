@@ -1,0 +1,13 @@
+{
+  "journey": {
+    "from": "NDLS",
+    "to": "BSBS",
+    "date": "06/11/2026",
+    "class": "3A",
+    "quota": "GENERAL"
+  },
+  "preferredTrains": [
+    "22436",
+    "04096"
+  ]
+}

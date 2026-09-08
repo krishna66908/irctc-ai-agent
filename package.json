@@ -1,0 +1,19 @@
+{
+  "name": "irctc-ai-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Personal browser automation assistant for IRCTC.",
+  "scripts": {
+    "start": "node src/main.js",
+    "demo": "node src/main.js --keep-open",
+    "install:browsers": "npx playwright install chromium"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "playwright": "1.63.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
