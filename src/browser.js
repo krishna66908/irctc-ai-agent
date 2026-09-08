@@ -2,6 +2,21 @@ import { chromium } from 'playwright';
 
 export const IRCTC_URL = 'https://www.irctc.co.in/nget/train-search';
 
+async function fixedDelay(milliseconds) {
+  await new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function typeHumanLike(locator, value) {
+  await locator.click();
+
+  for (let index = 0; index < value.length; index += 1) {
+    await locator.pressSequentially(value[index]);
+    if (index < value.length - 1) {
+      await fixedDelay(155);
+    }
+  }
+}
+
 export async function launchBrowser({ headless = false, channel } = {}) {
   return chromium.launch({
     headless,
@@ -11,7 +26,10 @@ export async function launchBrowser({ headless = false, channel } = {}) {
 
 export async function newPage(browser) {
   const context = await browser.newContext({
-    viewport: null,
+    viewport: {
+      width: 1440,
+      height: 900,
+    },
   });
 
   const page = await context.newPage();
@@ -25,13 +43,16 @@ export async function openIrctc(page) {
 }
 
 async function firstVisible(locatorCandidates, timeoutMs = 1500) {
-  for (const locator of locatorCandidates) {
-    try {
-      await locator.waitFor({ state: 'visible', timeout: timeoutMs });
-      return locator.first();
-    } catch {
-      // Try the next semantic candidate.
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    for (const locator of locatorCandidates) {
+      if (await locator.isVisible().catch(() => false)) {
+        return locator.first();
+      }
     }
+
+    await new Promise((resolve) => setTimeout(resolve, 75));
   }
 
   return null;
@@ -70,6 +91,7 @@ export async function selectEnglishLanguage(page) {
   }
 
   await englishControl.scrollIntoViewIfNeeded();
+  await fixedDelay(1000);
   await englishControl.click();
 
   await popup.waitFor({ state: 'hidden', timeout: 15000 });
@@ -79,6 +101,11 @@ export async function selectEnglishLanguage(page) {
 
 export async function detectLoginRegister(page) {
   const loginCandidates = [
+    page.locator('a:visible').filter({
+      hasText: /LOGIN\s*\/\s*REGISTER/i,
+    }),
+    page.locator('a:visible[aria-label*="Login"]'),
+    page.locator('a:visible.search_btn.loginText'),
     page.getByRole('link', { name: /login\s*\/?\s*register/i }),
     page.getByRole('link', { name: /click here to login in application/i }),
     page.getByRole('button', { name: /login\s*\/?\s*register/i }),
@@ -104,13 +131,21 @@ export async function detectLoginInterface(page) {
   const usernameField = page.getByRole('textbox', { name: /user\s*name|username/i });
   const passwordField = page.getByRole('textbox', { name: /password/i });
 
-  try {
-    await usernameField.waitFor({ state: 'visible', timeout: 5000 });
-    await passwordField.waitFor({ state: 'visible', timeout: 5000 });
-    return loginDialog;
-  } catch {
-    return null;
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const [usernameVisible, passwordVisible] = await Promise.all([
+      usernameField.isVisible().catch(() => false),
+      passwordField.isVisible().catch(() => false),
+    ]);
+
+    if (usernameVisible && passwordVisible) {
+      return loginDialog;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 75));
   }
+
+  return null;
 }
 
 export async function clickLoginRegister(page, loginControl = null) {
@@ -120,6 +155,7 @@ export async function clickLoginRegister(page, loginControl = null) {
   }
 
   await control.scrollIntoViewIfNeeded();
+  await fixedDelay(2000);
   await control.click();
 
   const loginInterface = await detectLoginInterface(page);
@@ -130,9 +166,13 @@ export async function clickLoginRegister(page, loginControl = null) {
   return loginInterface;
 }
 
-export async function fillLoginCredentials(page) {
-  const username = process.env.IRCTC_USERNAME;
-  const password = process.env.IRCTC_PASSWORD;
+export async function fillLoginCredentials(page, { testMode = false } = {}) {
+  const username = testMode
+    ? 'TEST_INVALID_USER_123456'
+    : process.env.IRCTC_USERNAME;
+  const password = testMode
+    ? 'TEST_INVALID_PASSWORD_123456'
+    : process.env.IRCTC_PASSWORD;
 
   if (!username) {
     throw new Error('IRCTC_USERNAME is not configured.');
@@ -145,29 +185,95 @@ export async function fillLoginCredentials(page) {
   const usernameField = page.getByRole('textbox', { name: /user\s*name|username/i });
   await usernameField.waitFor({ state: 'visible', timeout: 15000 });
 
-  await usernameField.fill(username);
+  const usernameStart = performance.now();
+  await typeHumanLike(usernameField, username);
+  const usernameMs = Math.round(performance.now() - usernameStart);
+  await fixedDelay(900);
 
   const passwordField = page.getByRole('textbox', { name: /password/i });
   await passwordField.waitFor({ state: 'visible', timeout: 15000 });
 
-  await passwordField.fill(password);
+  const passwordStart = performance.now();
+  await typeHumanLike(passwordField, password);
+  const passwordMs = Math.round(performance.now() - passwordStart);
+
+  return { usernameMs, passwordMs };
+}
+
+export async function detectTestLoginOutcome(page, timeoutMs = 15000) {
+  const securityCandidates = [
+    page.getByText(/captcha|otp verification|enter otp|security verification|verification code/i),
+    page.getByRole('textbox', { name: /otp|verification code/i }),
+  ];
+  const failureCandidates = [
+    page.getByText(/invalid user(?:name| name)?|invalid credentials|login failed|incorrect password/i),
+    page.getByRole('alert').filter({ hasText: /invalid|failed|incorrect|error/i }),
+  ];
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    for (const locator of securityCandidates) {
+      if (await locator.isVisible().catch(() => false)) {
+        return 'security';
+      }
+    }
+
+    for (const locator of failureCandidates) {
+      if (await locator.isVisible().catch(() => false)) {
+        return 'failure';
+      }
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 75));
+  }
+
+  return null;
 }
 
 export async function selectOtpInsteadOfCaptcha(page) {
-  const checkbox = await firstVisible([
+  const checkboxCandidates = [
     page.getByRole('checkbox', { name: /booking using otp|visually impaired|otp.*captcha/i }),
     page.getByLabel(/visually impaired.*receive otp instead of captcha/i),
-  ], 5000);
+    page.locator('#otpLogin'),
+  ];
+  const checkbox = await firstVisible(checkboxCandidates, 5000);
 
   if (!checkbox) {
     return false;
   }
 
-  if (!(await checkbox.isChecked())) {
-    await checkbox.check();
+  const interactionCandidates = [
+    page.locator('label[for="otpLogin"]:visible'),
+    page.locator('#otpLogin').locator('xpath=ancestor::label[1]'),
+    page.getByText(/visually impaired.*receive otp instead of captcha/i),
+    page.locator('#otpLogin'),
+  ];
+  const deadline = Date.now() + 3000;
+
+  while (Date.now() < deadline) {
+    if (await page.locator('#otpLogin').isChecked().catch(() => false)) {
+      return true;
+    }
+
+    for (const interaction of interactionCandidates) {
+      if (!(await interaction.isVisible().catch(() => false))) {
+        continue;
+      }
+
+      try {
+        await interaction.click({ timeout: 1000 });
+        if (await page.locator('#otpLogin').isChecked().catch(() => false)) {
+          return true;
+        }
+      } catch {
+        // Angular may replace the checkbox while the interaction is in progress.
+      }
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 75));
   }
 
-  return true;
+  throw new Error('OTP-instead-of-CAPTCHA checkbox was found but could not be selected.');
 }
 
 export async function submitSignIn(page) {
