@@ -7,6 +7,8 @@ import {
   launchBrowser,
   newPage,
   openIrctc,
+  clickLoginRegister,
+  detectLoginRegister,
   selectEnglishLanguage,
 } from './browser.js';
 
@@ -45,6 +47,16 @@ async function main() {
     } else {
       log('[Agent] Language popup not detected; leaving the current page as-is.');
     }
+
+    log('[Agent] Observing page for Login/Register...');
+    const loginControl = await detectLoginRegister(page);
+    if (!loginControl) {
+      throw new Error('Could not find a visible Login/Register control.');
+    }
+    log('[Agent] Login/Register detected.');
+    log('[Agent] Opening login interface...');
+    await clickLoginRegister(page, loginControl);
+    log('[Agent] Login interface detected.');
 
     if (keepOpen) {
       log('[Agent] Browser is staying open for visual verification.');

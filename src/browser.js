@@ -75,3 +75,54 @@ export async function selectEnglishLanguage(page) {
 
   return { detected: true, selected: true };
 }
+
+export async function detectLoginRegister(page) {
+  const loginCandidates = [
+    page.getByRole('link', { name: /login\s*\/?\s*register/i }),
+    page.getByRole('button', { name: /login\s*\/?\s*register/i }),
+    page.getByText(/^LOGIN\s*\/\s*REGISTER$/i),
+    page.locator('a').filter({ has: page.locator('i.fa-user') }),
+    page.locator('button').filter({ has: page.locator('i.fa-user') }),
+  ];
+
+  return firstVisible(loginCandidates, 5000);
+}
+
+export async function detectLoginInterface(page) {
+  const loginDialog = await firstVisible([
+    page.getByRole('dialog', { name: /login/i }),
+    page.getByText(/^LOGIN$/i),
+  ], 15000);
+
+  if (!loginDialog) {
+    return null;
+  }
+
+  const usernameField = page.getByRole('textbox', { name: /user\s*name|username/i });
+  const passwordField = page.getByRole('textbox', { name: /password/i });
+
+  try {
+    await usernameField.waitFor({ state: 'visible', timeout: 5000 });
+    await passwordField.waitFor({ state: 'visible', timeout: 5000 });
+    return loginDialog;
+  } catch {
+    return null;
+  }
+}
+
+export async function clickLoginRegister(page, loginControl = null) {
+  const control = loginControl ?? await detectLoginRegister(page);
+  if (!control) {
+    throw new Error('Could not find a visible Login/Register control.');
+  }
+
+  await control.scrollIntoViewIfNeeded();
+  await control.click();
+
+  const loginInterface = await detectLoginInterface(page);
+  if (!loginInterface) {
+    throw new Error('Login/Register was clicked, but the login interface did not appear.');
+  }
+
+  return loginInterface;
+}
