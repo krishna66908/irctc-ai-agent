@@ -9,7 +9,12 @@ import {
   openIrctc,
   clickLoginRegister,
   detectLoginRegister,
+  detectOtpSecurityCheckpoint,
+  fillLoginCredentials,
   selectEnglishLanguage,
+  selectOtpInsteadOfCaptcha,
+  submitSignIn,
+  waitForLoggedInState,
 } from './browser.js';
 
 function log(message) {
@@ -28,9 +33,10 @@ async function waitForEnterToExit() {
 
 async function main() {
   const keepOpen = process.argv.includes('--keep-open');
+  const channel = process.argv.includes('--system-chrome') ? 'chrome' : undefined;
 
   log('[Agent] Starting browser...');
-  const browser = await launchBrowser({ headless: false });
+  const browser = await launchBrowser({ headless: false, channel });
   const { context, page } = await newPage(browser);
 
   try {
@@ -57,6 +63,27 @@ async function main() {
     log('[Agent] Opening login interface...');
     await clickLoginRegister(page, loginControl);
     log('[Agent] Login interface detected.');
+
+    log('[Agent] Reading login credentials from the environment...');
+    await fillLoginCredentials(page);
+    log('[Agent] Username and password fields filled.');
+
+    log('[Agent] Observing for the OTP-instead-of-CAPTCHA option...');
+    const otpOptionSelected = await selectOtpInsteadOfCaptcha(page);
+    if (otpOptionSelected) {
+      log('[Agent] OTP-instead-of-CAPTCHA option selected.');
+    } else {
+      log('[Agent] OTP-instead-of-CAPTCHA option not detected; continuing.');
+    }
+
+    log('[Agent] Observing for SIGN IN...');
+    await submitSignIn(page);
+    log('[Agent] SIGN IN submitted.');
+    await detectOtpSecurityCheckpoint(page);
+    log('[Agent] Waiting for manual OTP/security verification...');
+    console.log('[Human] Please complete the OTP/security verification manually in the browser.');
+    await waitForLoggedInState(page);
+    log('[Agent] Logged-in state detected.');
 
     if (keepOpen) {
       log('[Agent] Browser is staying open for visual verification.');

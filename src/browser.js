@@ -2,9 +2,10 @@ import { chromium } from 'playwright';
 
 export const IRCTC_URL = 'https://www.irctc.co.in/nget/train-search';
 
-export async function launchBrowser({ headless = false } = {}) {
+export async function launchBrowser({ headless = false, channel } = {}) {
   return chromium.launch({
     headless,
+    ...(channel ? { channel } : {}),
   });
 }
 
@@ -79,8 +80,10 @@ export async function selectEnglishLanguage(page) {
 export async function detectLoginRegister(page) {
   const loginCandidates = [
     page.getByRole('link', { name: /login\s*\/?\s*register/i }),
+    page.getByRole('link', { name: /click here to login in application/i }),
     page.getByRole('button', { name: /login\s*\/?\s*register/i }),
     page.getByText(/^LOGIN\s*\/\s*REGISTER$/i),
+    page.locator('a:has(i.fa-user)'),
     page.locator('a').filter({ has: page.locator('i.fa-user') }),
     page.locator('button').filter({ has: page.locator('i.fa-user') }),
   ];
@@ -125,4 +128,76 @@ export async function clickLoginRegister(page, loginControl = null) {
   }
 
   return loginInterface;
+}
+
+export async function fillLoginCredentials(page) {
+  const username = process.env.IRCTC_USERNAME;
+  const password = process.env.IRCTC_PASSWORD;
+
+  if (!username) {
+    throw new Error('IRCTC_USERNAME is not configured.');
+  }
+
+  if (!password) {
+    throw new Error('IRCTC_PASSWORD is not configured.');
+  }
+
+  const usernameField = page.getByRole('textbox', { name: /user\s*name|username/i });
+  await usernameField.waitFor({ state: 'visible', timeout: 15000 });
+
+  await usernameField.fill(username);
+
+  const passwordField = page.getByRole('textbox', { name: /password/i });
+  await passwordField.waitFor({ state: 'visible', timeout: 15000 });
+
+  await passwordField.fill(password);
+}
+
+export async function selectOtpInsteadOfCaptcha(page) {
+  const checkbox = await firstVisible([
+    page.getByRole('checkbox', { name: /booking using otp|visually impaired|otp.*captcha/i }),
+    page.getByLabel(/visually impaired.*receive otp instead of captcha/i),
+  ], 5000);
+
+  if (!checkbox) {
+    return false;
+  }
+
+  if (!(await checkbox.isChecked())) {
+    await checkbox.check();
+  }
+
+  return true;
+}
+
+export async function submitSignIn(page) {
+  const signIn = await firstVisible([
+    page.getByRole('button', { name: /sign\s*in/i }),
+    page.getByText(/^SIGN\s*IN$/i),
+  ], 15000);
+
+  if (!signIn) {
+    throw new Error('Could not find a visible SIGN IN control.');
+  }
+
+  await signIn.click();
+}
+
+export async function detectOtpSecurityCheckpoint(page) {
+  return firstVisible([
+    page.getByText(/otp verification|enter otp|security verification|verification code/i),
+    page.getByRole('textbox', { name: /otp|verification code/i }),
+  ], 15000);
+}
+
+export async function waitForLoggedInState(page) {
+  await page.waitForFunction(() => {
+    const bodyText = document.body.innerText.toLowerCase();
+    const loginDialog = Array.from(document.querySelectorAll('[role="dialog"]'))
+      .some((dialog) => /login/i.test(dialog.textContent || '') &&
+        getComputedStyle(dialog).visibility !== 'hidden');
+    const authenticatedIndicator = /\b(logout|sign out|my account|profile)\b/i.test(bodyText);
+
+    return !loginDialog && authenticatedIndicator;
+  }, undefined, { timeout: 10 * 60 * 1000 });
 }
