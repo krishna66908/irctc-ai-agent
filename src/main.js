@@ -166,7 +166,22 @@ async function main() {
       await new Promise(() => {});
     }
     log('[Agent] Origin station selected and verified.');
-    return;
+
+    const toStation = {
+      code: preferences.journey.to,
+      name: 'BANARAS',
+    };
+    log('[Agent] Observing destination To field...');
+    log(`[Agent] Entering destination: ${toStation.code}`);
+    try {
+      await fillAndSelectStation(page, 'To', toStation, { diagnostic: true });
+    } catch (error) {
+      log('[Agent] To autocomplete selection failed.');
+      log(`[Diagnostic] To selection error: ${error instanceof Error ? error.message : String(error)}`);
+      log('[Agent] Browser left open for manual inspection.');
+      await new Promise(() => {});
+    }
+    log('[Agent] Destination station selected and verified.');
 
     if (keepOpen) {
       log('[Agent] Browser is staying open for visual verification.');

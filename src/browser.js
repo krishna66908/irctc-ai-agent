@@ -320,6 +320,9 @@ export async function detectStationInput(page, stationLabel) {
     ...(stationLabel === 'From'
       ? [page.locator('[aria-label="Enter From station. Input is Mandatory."]:visible')]
       : []),
+    ...(stationLabel === 'To'
+      ? [page.locator('[aria-label="Enter To station. Input is Mandatory."]:visible')]
+      : []),
     page.getByRole('combobox', { name: labelPattern }),
     page.getByRole('textbox', { name: labelPattern }),
     page.getByLabel(labelPattern),
@@ -328,6 +331,21 @@ export async function detectStationInput(page, stationLabel) {
   ];
 
   return firstVisible(stationCandidates, 15000);
+}
+
+async function logStationInputDiagnostics(page, stationLabel, field) {
+  const details = await field.evaluate((element) => ({
+    tag: element.tagName,
+    id: element.id || null,
+    name: element.getAttribute('name'),
+    ariaLabel: element.getAttribute('aria-label'),
+    placeholder: element.getAttribute('placeholder'),
+    value: element.value,
+    visible: Boolean(element.offsetWidth || element.offsetHeight || element.getClientRects().length),
+    enabled: !element.disabled && element.getAttribute('aria-disabled') !== 'true',
+  })).catch(() => null);
+
+  console.log(`[Diagnostic] ${stationLabel} input detected: ${JSON.stringify(details)}`);
 }
 
 function stationPattern(station) {
@@ -506,7 +524,7 @@ async function verifyStationInput(field, station) {
   return false;
 }
 
-async function logFromFieldDiagnostics(page, field) {
+async function logStationFieldDiagnostics(page, stationLabel, field) {
   const details = await field.evaluate((element) => {
     const active = document.activeElement;
     return {
@@ -527,7 +545,7 @@ async function logFromFieldDiagnostics(page, field) {
     };
   }, undefined, { timeout: 1000 }).catch(() => null);
 
-  console.log(`[Diagnostic] From input state: ${JSON.stringify(details)}`);
+  console.log(`[Diagnostic] ${stationLabel} input state: ${JSON.stringify(details)}`);
 }
 
 async function logKeyboardSelectionDiagnostics(page, field) {
@@ -607,6 +625,10 @@ export async function fillAndSelectStation(page, stationLabel, station, { diagno
     throw new Error(`Could not find the visible ${stationLabel} station input.`);
   }
 
+  if (diagnostic) {
+    await logStationInputDiagnostics(page, stationLabel, field);
+  }
+
   await field.scrollIntoViewIfNeeded();
   await typeHumanLike(field, station.code);
 
@@ -617,22 +639,22 @@ export async function fillAndSelectStation(page, stationLabel, station, { diagno
     );
   }
 
-  const fromField = await detectStationInput(page, stationLabel);
-  if (!fromField) {
+  const stationField = await detectStationInput(page, stationLabel);
+  if (!stationField) {
     throw new Error(`Could not re-detect the visible ${stationLabel} station input.`);
   }
 
-  console.log(`[Diagnostic] From value after typing: ${await fromField.inputValue()}`);
+  console.log(`[Diagnostic] ${stationLabel} value after typing: ${await stationField.inputValue()}`);
   try {
-    await logFromFieldDiagnostics(page, fromField);
+    await logStationFieldDiagnostics(page, stationLabel, stationField);
   } catch (error) {
-    console.log(`[Diagnostic] From input snapshot failed: ${error instanceof Error ? error.message : String(error)}`);
+    console.log(`[Diagnostic] ${stationLabel} input snapshot failed: ${error instanceof Error ? error.message : String(error)}`);
   }
-  await fromField.focus();
-  console.log(`[Diagnostic] From input focused: ${await fromField.evaluate((element) => document.activeElement === element)}`);
+  await stationField.focus();
+  console.log(`[Diagnostic] ${stationLabel} input focused: ${await stationField.evaluate((element) => document.activeElement === element)}`);
 
   const maxNavigationAttempts = 25;
-  let highlightedState = await readHighlightedOption(page, fromField);
+  let highlightedState = await readHighlightedOption(page, stationField);
   let highlighted = highlightedState.highlighted;
   let highlightedKey = highlighted && `${highlighted.id}|${highlighted.text}|${highlighted.className}`;
 
@@ -646,14 +668,14 @@ export async function fillAndSelectStation(page, stationLabel, station, { diagno
       throw new Error(`Could not highlight ${station.name} - ${station.code} within ${maxNavigationAttempts} ArrowDown attempts.`);
     }
 
-    await fromField.press('ArrowDown');
-    const next = await waitForHighlightedOptionChange(page, fromField, highlightedKey);
+    await stationField.press('ArrowDown');
+    const next = await waitForHighlightedOptionChange(page, stationField, highlightedKey);
     highlightedState = next.state;
     highlighted = highlightedState?.highlighted || null;
     highlightedKey = next.key;
   }
 
-  await fromField.press('Enter');
+  await stationField.press('Enter');
 
   const verifiedField = await detectStationInput(page, stationLabel);
   const finalValue = verifiedField ? await verifiedField.inputValue().catch(() => '') : '';
