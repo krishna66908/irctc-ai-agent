@@ -3,6 +3,9 @@
     "from": "NDLS",
     "to": "BNRS",
     "date": "06/11/2026",
+    "railwayPassConcession": {
+      "enabled": true
+    },
     "class": "3A",
     "quota": "GENERAL"
   },

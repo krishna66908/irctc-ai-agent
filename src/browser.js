@@ -611,6 +611,67 @@ export async function selectJourneyDate(page, configuredDate) {
   throw new Error(`Journey date entry could not be verified: expected ${target.value}.`);
 }
 
+export async function selectRailwayPassConcession(page, enabled) {
+  if (typeof enabled !== 'boolean') {
+    throw new Error('Railway Pass Concession setting must be a boolean.');
+  }
+
+  const control = await firstVisible([
+    page.getByRole('checkbox', { name: /railway pass concession|check for pass booking/i }),
+    page.getByLabel(/railway pass concession|check for pass booking/i),
+    page.locator('label[for="passBooking"]:visible'),
+    page.locator('#passBooking:visible'),
+  ], 10000);
+
+  if (!control) {
+    if (!enabled) {
+      console.log('[Agent] Railway Pass Concession disabled by configuration.');
+      return;
+    }
+    throw new Error('Could not find a visible Railway Pass Concession control.');
+  }
+
+  const checkbox = page.locator('#passBooking').first();
+  await checkbox.waitFor({ state: 'attached', timeout: 10000 });
+  const details = await checkbox.evaluate((element) => ({
+    tag: element.tagName,
+    id: element.id || null,
+    ariaLabel: element.getAttribute('aria-label'),
+    role: element.getAttribute('role'),
+    checked: element.checked,
+    disabled: element.disabled || element.getAttribute('aria-disabled') === 'true',
+  }));
+  console.log(`[Diagnostic] Railway Pass Concession control detected: ${JSON.stringify(details)}`);
+
+  if (details.disabled) {
+    throw new Error('Railway Pass Concession control is disabled.');
+  }
+
+  if (enabled && !details.checked) {
+    try {
+      await checkbox.check({ timeout: 2000 });
+    } catch {
+      const label = page.locator('label[for="passBooking"]:visible');
+      if (!(await label.isVisible().catch(() => false))) {
+        throw new Error('Railway Pass Concession could not be checked.');
+      }
+      await label.click({ timeout: 2000 });
+    }
+  } else if (!enabled && details.checked) {
+    await checkbox.uncheck({ timeout: 2000 });
+  }
+
+  const checked = await checkbox.isChecked().catch(() => false);
+  console.log(`[Diagnostic] Railway Pass Concession checked: ${checked}`);
+  if (checked !== enabled) {
+    throw new Error(`Railway Pass Concession state could not be verified: expected ${enabled}.`);
+  }
+
+  if (enabled) {
+    console.log('[Agent] Railway Pass Concession enabled.');
+  }
+}
+
 async function logStationFieldDiagnostics(page, stationLabel, field) {
   const details = await field.evaluate((element) => {
     const active = document.activeElement;

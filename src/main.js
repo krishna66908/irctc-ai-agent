@@ -14,6 +14,7 @@ import {
   fillLoginCredentials,
   fillAndSelectStation,
   loadJourneyPreferences,
+  selectRailwayPassConcession,
   selectJourneyDate,
   selectEnglishLanguage,
   selectOtpInsteadOfCaptcha,
@@ -186,6 +187,12 @@ async function main() {
 
     await selectJourneyDate(page, preferences.journey.date);
     log('[Agent] Date selection complete.');
+
+    const railwayPassConcession = preferences.journey.railwayPassConcession;
+    if (!railwayPassConcession || typeof railwayPassConcession.enabled !== 'boolean') {
+      throw new Error('journey.railwayPassConcession.enabled must be configured as a boolean.');
+    }
+    await selectRailwayPassConcession(page, railwayPassConcession.enabled);
 
     if (keepOpen) {
       log('[Agent] Browser is staying open for visual verification.');
