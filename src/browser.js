@@ -524,6 +524,93 @@ async function verifyStationInput(field, station) {
   return false;
 }
 
+function parseConfiguredDate(configuredDate) {
+  if (typeof configuredDate !== 'string') {
+    throw new Error('Journey date must be a string in DD/MM/YYYY format.');
+  }
+
+  const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(configuredDate);
+  if (!match) {
+    throw new Error(`Journey date must use DD/MM/YYYY format: ${configuredDate}`);
+  }
+
+  const [, day, month, year] = match;
+  const numericDay = Number(day);
+  const numericMonth = Number(month);
+  const numericYear = Number(year);
+  const leapYear = numericYear % 4 === 0 &&
+    (numericYear % 100 !== 0 || numericYear % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+  if (numericYear < 1 || numericMonth < 1 || numericMonth > 12 ||
+    numericDay < 1 || numericDay > daysInMonth[numericMonth - 1]) {
+    throw new Error(`Journey date is not a valid calendar date: ${configuredDate}`);
+  }
+
+  return {
+    day: numericDay,
+    month: numericMonth,
+    year: numericYear,
+    value: configuredDate,
+  };
+}
+
+async function detectJourneyDateInput(page, { diagnostic = true } = {}) {
+  const dateInput = await firstVisible([
+    page.locator('#jDate input:visible'),
+    page.locator('input#jDate:visible'),
+    page.getByRole('textbox', { name: /enter journey date.*mandatory/i }),
+    page.locator('input[aria-label*="Enter Journey Date" i]:visible'),
+  ], 15000);
+
+  if (!dateInput) {
+    throw new Error('Could not find the visible journey date input.');
+  }
+
+  if (diagnostic) {
+    const details = await dateInput.evaluate((element) => ({
+      tag: element.tagName,
+      id: element.id || null,
+      name: element.getAttribute('name'),
+      ariaLabel: element.getAttribute('aria-label'),
+      placeholder: element.getAttribute('placeholder'),
+      value: element.value,
+      type: element.getAttribute('type'),
+      visible: Boolean(element.offsetWidth || element.offsetHeight || element.getClientRects().length),
+      enabled: !element.disabled && element.getAttribute('aria-disabled') !== 'true',
+      readonly: element.readOnly,
+    }));
+    console.log(`[Diagnostic] Date input: ${JSON.stringify(details)}`);
+  }
+
+  return dateInput;
+}
+
+export async function selectJourneyDate(page, configuredDate) {
+  const target = parseConfiguredDate(configuredDate);
+  const dateInput = await detectJourneyDateInput(page);
+
+  await dateInput.scrollIntoViewIfNeeded();
+  await dateInput.click();
+  await dateInput.fill('');
+  await dateInput.pressSequentially(target.value);
+  await dateInput.press('Tab');
+
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const currentInput = await detectJourneyDateInput(page, { diagnostic: false }).catch(() => null);
+    const value = currentInput ? await currentInput.inputValue().catch(() => '') : '';
+    if (value === target.value) {
+      console.log(`[Agent] Journey date selected and verified: ${value}`);
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 75));
+  }
+
+  throw new Error(`Journey date entry could not be verified: expected ${target.value}.`);
+}
+
 async function logStationFieldDiagnostics(page, stationLabel, field) {
   const details = await field.evaluate((element) => {
     const active = document.activeElement;

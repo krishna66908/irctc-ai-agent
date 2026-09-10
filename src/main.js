@@ -14,6 +14,7 @@ import {
   fillLoginCredentials,
   fillAndSelectStation,
   loadJourneyPreferences,
+  selectJourneyDate,
   selectEnglishLanguage,
   selectOtpInsteadOfCaptcha,
   submitSignIn,
@@ -182,6 +183,9 @@ async function main() {
       await new Promise(() => {});
     }
     log('[Agent] Destination station selected and verified.');
+
+    await selectJourneyDate(page, preferences.journey.date);
+    log('[Agent] Date selection complete.');
 
     if (keepOpen) {
       log('[Agent] Browser is staying open for visual verification.');
