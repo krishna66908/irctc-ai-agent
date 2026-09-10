@@ -672,6 +672,56 @@ export async function selectRailwayPassConcession(page, enabled) {
   }
 }
 
+export async function searchTrains(page) {
+  const searchButtonCandidates = [
+    page.getByRole('button', { name: /^search trains$/i }),
+    page.getByRole('button', { name: /search trains/i }),
+    page.locator('button:visible').filter({ hasText: /^\s*search trains\s*$/i }),
+  ];
+  const detectedButton = await firstVisible(searchButtonCandidates, 15000);
+  if (!detectedButton) {
+    throw new Error('Could not find a visible Search Trains button.');
+  }
+
+  const buttonDetails = await detectedButton.evaluate((element) => ({
+    text: (element.innerText || element.textContent || '').replace(/\s+/g, ' ').trim(),
+    visible: Boolean(element.offsetWidth || element.offsetHeight || element.getClientRects().length),
+    enabled: !element.disabled && element.getAttribute('aria-disabled') !== 'true',
+  }));
+  console.log(`[Diagnostic] Search Trains button: ${JSON.stringify(buttonDetails)}`);
+
+  const button = await firstVisible(searchButtonCandidates, 1000);
+  if (!button || !(await button.isEnabled().catch(() => false))) {
+    throw new Error('Search Trains button is not enabled/actionable.');
+  }
+
+  const initialUrl = page.url();
+  await button.click();
+
+  const resultCandidates = [
+    page.getByText(/available trains|train results|train number|train name/i),
+    page.locator('[class*="train-result" i]:visible, [class*="train-list" i]:visible, [class*="train-card" i]:visible'),
+  ];
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    if (page.url() !== initialUrl) {
+      console.log(`[Diagnostic] Search state detected: navigation to ${page.url()}`);
+      return;
+    }
+
+    for (const candidate of resultCandidates) {
+      if (await candidate.isVisible().catch(() => false)) {
+        console.log('[Diagnostic] Search state detected: train-results UI is visible.');
+        return;
+      }
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 75));
+  }
+
+  throw new Error('Search Trains was clicked, but no navigation or train-results state was detected.');
+}
+
 async function logStationFieldDiagnostics(page, stationLabel, field) {
   const details = await field.evaluate((element) => {
     const active = document.activeElement;

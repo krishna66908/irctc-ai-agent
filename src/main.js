@@ -14,6 +14,7 @@ import {
   fillLoginCredentials,
   fillAndSelectStation,
   loadJourneyPreferences,
+  searchTrains,
   selectRailwayPassConcession,
   selectJourneyDate,
   selectEnglishLanguage,
@@ -193,6 +194,8 @@ async function main() {
       throw new Error('journey.railwayPassConcession.enabled must be configured as a boolean.');
     }
     await selectRailwayPassConcession(page, railwayPassConcession.enabled);
+    await searchTrains(page);
+    log('[Agent] Search Trains action started and result state detected.');
 
     if (keepOpen) {
       log('[Agent] Browser is staying open for visual verification.');
