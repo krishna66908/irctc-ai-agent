@@ -611,6 +611,38 @@ export async function selectJourneyDate(page, configuredDate) {
   throw new Error(`Journey date entry could not be verified: expected ${target.value}.`);
 }
 
+async function waitForUnobstructedClick(locator, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const box = await locator.boundingBox().catch(() => null);
+    if (box) {
+      const center = {
+        x: box.x + box.width / 2,
+        y: box.y + box.height / 2,
+      };
+
+      const unobstructed = await locator.evaluate((element, point) => {
+        const hit = document.elementFromPoint(point.x, point.y);
+        return Boolean(hit) && (hit === element || element.contains(hit));
+      }, center).catch(() => false);
+
+      if (unobstructed) {
+        try {
+          await locator.click({ timeout: 1000 });
+          return true;
+        } catch {
+          // Overlay reappeared; continue polling.
+        }
+      }
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 75));
+  }
+
+  return false;
+}
+
 export async function selectRailwayPassConcession(page, enabled) {
   if (typeof enabled !== 'boolean') {
     throw new Error('Railway Pass Concession setting must be a boolean.');
@@ -655,7 +687,12 @@ export async function selectRailwayPassConcession(page, enabled) {
       if (!(await label.isVisible().catch(() => false))) {
         throw new Error('Railway Pass Concession could not be checked.');
       }
-      await label.click({ timeout: 2000 });
+      const clicked = await waitForUnobstructedClick(label);
+      if (!clicked) {
+        throw new Error(
+          'Railway Pass Concession label click was blocked by an overlapping element (e.g. the animated header banner) and could not complete.',
+        );
+      }
     }
   } else if (!enabled && details.checked) {
     await checkbox.uncheck({ timeout: 2000 });
